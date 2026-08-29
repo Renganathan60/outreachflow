@@ -1,4 +1,4 @@
-import { Resend } from 'resend';
+import nodemailer, { Transporter, TestAccount } from 'nodemailer';
 import { config } from '../config/env.js';
 import { BadRequestError } from '../utils/errors.js';
 
@@ -15,35 +15,50 @@ export interface SendEmailPayload {
 
 export interface EmailSendResult {
   messageId: string;
+  previewUrl: string;
   provider: string;
-  status: 'EMAIL_SUBMITTED';
+  status: 'EMAIL_SENT';
   to: string;
   subject: string;
 }
 
 export class EmailService {
-  private resendClient: Resend | null = null;
-
-  constructor() {
-    if (config.email.resendApiKey) {
-      this.resendClient = new Resend(config.email.resendApiKey);
-    }
-  }
+  private transporter: Transporter | null = null;
+  private cachedTestAccount: TestAccount | null = null;
 
   /**
-   * Re-evaluates client instance if config is updated dynamically
+   * Initializes or retrieves a Nodemailer SMTP Transporter configured for Ethereal Email
    */
-  private getClient(): Resend {
-    const apiKey = config.email.resendApiKey || process.env.RESEND_API_KEY;
-    if (!apiKey) {
-      throw new BadRequestError(
-        'Email delivery provider is not configured. Please configure RESEND_API_KEY in the backend environment to enable real email delivery.'
-      );
+  private async getTransporter(): Promise<Transporter> {
+    if (this.transporter) {
+      return this.transporter;
     }
-    if (!this.resendClient || (this.resendClient as any).key !== apiKey) {
-      this.resendClient = new Resend(apiKey);
+
+    let user = config.email.etherealUser;
+    let pass = config.email.etherealPass;
+
+    // If no credentials in .env, automatically create a real Ethereal Test Account on-the-fly
+    if (!user || !pass) {
+      if (!this.cachedTestAccount) {
+        console.log('🔄 Creating new Ethereal Email test account for SMTP delivery...');
+        this.cachedTestAccount = await nodemailer.createTestAccount();
+        console.log(`✅ Generated Ethereal Test Account: ${this.cachedTestAccount.user}`);
+      }
+      user = this.cachedTestAccount.user;
+      pass = this.cachedTestAccount.pass;
     }
-    return this.resendClient;
+
+    this.transporter = nodemailer.createTransport({
+      host: config.email.etherealHost || 'smtp.ethereal.email',
+      port: config.email.etherealPort || 587,
+      secure: false, // true for 465, false for other ports (587)
+      auth: {
+        user,
+        pass
+      }
+    });
+
+    return this.transporter;
   }
 
   /**
@@ -67,7 +82,7 @@ export class EmailService {
     ${paragraphs}
     <hr style="border: none; border-top: 1px solid #f1f5f9; margin: 24px 0 16px 0;" />
     <p style="font-size: 11px; color: #94a3b8; margin: 0;">
-      Sent via OutreachFlow Intelligent Campaign Engine
+      Sent via OutreachFlow Intelligent Campaign Engine & Ethereal SMTP
     </p>
   </div>
 </body>
@@ -76,8 +91,8 @@ export class EmailService {
   }
 
   /**
-   * Sends transactional cadence email to the authoritative recipient via Resend API
-   * (or seamless dev sandbox when RESEND_API_KEY is not yet populated).
+   * Sends transactional cadence email via Nodemailer + Ethereal SMTP
+   * Generates and returns real Ethereal Web Preview URL (nodemailer.getTestMessageUrl)
    */
   async sendCadenceEmail(payload: SendEmailPayload): Promise<EmailSendResult> {
     const { to, toName, subject, body } = payload;
@@ -86,65 +101,49 @@ export class EmailService {
       throw new BadRequestError(`Invalid recipient email address: '${to}'`);
     }
 
-    const apiKey = config.email.resendApiKey || process.env.RESEND_API_KEY;
+    try {
+      const transporter = await this.getTransporter();
 
-    // 1. If RESEND_API_KEY is configured, dispatch through live Resend API
-    if (apiKey && apiKey.trim() !== '') {
-      const client = this.getClient();
       const fromAddress = config.email.fromName
-        ? `${config.email.fromName} <${config.email.from}>`
+        ? `"${config.email.fromName}" <${config.email.from}>`
         : config.email.from;
 
       const htmlContent = this.formatHtmlBody(body);
 
-      try {
-        const response = await client.emails.send({
-          from: fromAddress,
-          to: toName ? `${toName} <${to}>` : to,
-          subject: subject,
-          text: body,
-          html: htmlContent
-        });
+      // Perform real SMTP transmission through Ethereal
+      const info = await transporter.sendMail({
+        from: fromAddress,
+        to: toName ? `"${toName}" <${to}>` : to,
+        subject,
+        text: body,
+        html: htmlContent
+      });
 
-        if (response.error) {
-          console.error('❌ Resend API delivery error:', response.error);
-          throw new BadRequestError(`Email provider delivery failed: ${response.error.message}`);
-        }
+      // Capture official Ethereal web preview URL
+      const previewUrl = nodemailer.getTestMessageUrl(info) || '';
 
-        const messageId = response.data?.id || `resend_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-
-        return {
-          messageId,
-          provider: 'resend',
-          status: 'EMAIL_SUBMITTED',
-          to,
-          subject
-        };
-      } catch (error: any) {
-        if (error instanceof BadRequestError) {
-          throw error;
-        }
-        console.error('❌ Unexpected error during email transmission:', error.message);
-        throw new BadRequestError(
-          error.message ? `Email delivery failed: ${error.message}` : 'Failed to deliver email through transactional provider'
-        );
+      console.log('----------------------------------------------------');
+      console.log(`✉️ [Ethereal SMTP] Email sent to: ${to}`);
+      console.log(`📋 [Message ID]: ${info.messageId}`);
+      if (previewUrl) {
+        console.log(`🔗 [Ethereal Preview URL]: ${previewUrl}`);
       }
+      console.log('----------------------------------------------------');
+
+      return {
+        messageId: info.messageId,
+        previewUrl: typeof previewUrl === 'string' ? previewUrl : '',
+        provider: 'ethereal',
+        status: 'EMAIL_SENT',
+        to,
+        subject
+      };
+    } catch (error: any) {
+      console.error('❌ Ethereal SMTP delivery error:', error.message);
+      throw new BadRequestError(
+        error.message ? `SMTP delivery failed: ${error.message}` : 'Failed to deliver email through Ethereal SMTP provider'
+      );
     }
-
-    // 2. Dev Sandbox Fallback Mode (when RESEND_API_KEY is not yet populated in .env)
-    console.log(`✉️ [OutreachFlow Email Sandbox] Dispatched email to: ${toName ? `${toName} <${to}>` : to}`);
-    console.log(`📋 [Subject]: ${subject}`);
-    console.log(`📝 [Body preview]: ${body.slice(0, 100).replace(/\n/g, ' ')}...`);
-
-    const devMessageId = `resend_sandbox_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-
-    return {
-      messageId: devMessageId,
-      provider: 'resend-sandbox',
-      status: 'EMAIL_SUBMITTED',
-      to,
-      subject
-    };
   }
 }
 

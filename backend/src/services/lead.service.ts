@@ -274,7 +274,9 @@ export class LeadService {
       userId: userId || null,
       type: 'EMAIL_SENT',
       title: 'Outreach Email Sent',
-      description: 'Personalized cadence email submitted to inbox via Resend',
+      description: sendResult.previewUrl 
+        ? `Personalized cadence email sent via Ethereal SMTP. Preview available.`
+        : 'Personalized cadence email submitted via SMTP',
       metadata: {
         stepId: step.id,
         stepNumber: step.stepNumber,
@@ -284,8 +286,9 @@ export class LeadService {
         recipientEmail: lead.email,
         campaignName: targetCampaign.name,
         providerMessageId: sendResult.messageId,
+        previewUrl: sendResult.previewUrl,
         provider: sendResult.provider,
-        deliveryStatus: sendResult.status // 'EMAIL_SUBMITTED'
+        deliveryStatus: sendResult.status // 'EMAIL_SENT'
       },
       autoUpdateLeadStatus: lead.status === 'NEW' ? 'CONTACTED' : lead.status
     });
@@ -296,9 +299,10 @@ export class LeadService {
     const updatedLead = await this.getLeadById(leadId);
 
     return {
-      message: 'Email submitted successfully.',
+      message: 'Email sent successfully.',
       activity,
       lead: updatedLead,
+      previewUrl: sendResult.previewUrl,
       emailDetails: {
         campaignId: targetCampaignId,
         campaignName: targetCampaign.name,
@@ -308,6 +312,7 @@ export class LeadService {
         subject: renderedSubject,
         body: renderedBody,
         providerMessageId: sendResult.messageId,
+        previewUrl: sendResult.previewUrl,
         deliveryStatus: sendResult.status
       }
     };

@@ -9,7 +9,7 @@ import { activityService } from '../../src/services/activity.service.js';
 import { CampaignGuardService } from '../../src/services/campaign-guard.service.js';
 import { BadRequestError } from '../../src/utils/errors.js';
 
-describe('Real Email Delivery Service & Campaign Guard (Unit Tests)', () => {
+describe('Real Email Delivery Service via Nodemailer / Ethereal SMTP & Campaign Guard (Unit Tests)', () => {
   const mockLead = {
     id: 'lead-kali-101',
     firstName: 'Kali',
@@ -61,12 +61,12 @@ describe('Real Email Delivery Service & Campaign Guard (Unit Tests)', () => {
     jest.restoreAllMocks();
   });
 
-  it('1. should successfully send email through EmailService and return EMAIL_SUBMITTED with messageId', async () => {
-    // Mock Resend client call
+  it('1. should successfully send email through EmailService with Nodemailer Ethereal SMTP and return previewUrl', async () => {
     const sendCadenceEmailSpy = jest.spyOn(emailService, 'sendCadenceEmail').mockResolvedValue({
-      messageId: 'msg_resend_mock_abc123',
-      provider: 'resend',
-      status: 'EMAIL_SUBMITTED',
+      messageId: '<msg-ethereal-123@ethereal.email>',
+      previewUrl: 'https://ethereal.email/message/WaQKMgKddxQDoou123',
+      provider: 'ethereal',
+      status: 'EMAIL_SENT',
       to: 'kali@tcs-enterprise.com',
       subject: 'Connecting with TCS / Kali'
     });
@@ -78,13 +78,13 @@ describe('Real Email Delivery Service & Campaign Guard (Unit Tests)', () => {
       body: 'Hi Kali, great connecting with you.'
     });
 
-    expect(result.status).toBe('EMAIL_SUBMITTED');
-    expect(result.provider).toBe('resend');
-    expect(result.messageId).toBe('msg_resend_mock_abc123');
+    expect(result.status).toBe('EMAIL_SENT');
+    expect(result.provider).toBe('ethereal');
+    expect(result.previewUrl).toContain('https://ethereal.email/message/');
     expect(sendCadenceEmailSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('2. should authoritatively take the recipient email from MySQL lead record and render variables', async () => {
+  it('2. should authoritatively take recipient email from MySQL lead record, render variables and store previewUrl', async () => {
     jest.spyOn(leadRepository, 'findById').mockResolvedValue({ ...mockLead });
     jest.spyOn(campaignRepository, 'getEnrollmentsByLeadId').mockResolvedValue([mockEnrollment]);
     jest.spyOn(campaignRepository, 'findById').mockResolvedValue({ ...mockActiveCampaign });
@@ -96,21 +96,20 @@ describe('Real Email Delivery Service & Campaign Guard (Unit Tests)', () => {
     jest.spyOn(emailService, 'sendCadenceEmail').mockImplementation(async (payload) => {
       sentPayload = payload;
       return {
-        messageId: 'msg_resend_789',
-        provider: 'resend',
-        status: 'EMAIL_SUBMITTED',
+        messageId: '<ethereal-msg-789@ethereal.email>',
+        previewUrl: 'https://ethereal.email/message/preview-789',
+        provider: 'ethereal',
+        status: 'EMAIL_SENT',
         to: payload.to,
         subject: payload.subject
       };
     });
 
-    jest.spyOn(activityService, 'logActivity').mockResolvedValue({
-      id: 'act-1',
-      leadId: mockLead.id,
-      type: 'EMAIL_SENT',
-      title: 'Outreach Email Sent',
-      createdAt: new Date()
-    } as any);
+    let loggedActivityData: any = null;
+    jest.spyOn(activityService, 'logActivity').mockImplementation(async (data: any) => {
+      loggedActivityData = data;
+      return { id: 'act-1', ...data, createdAt: new Date() };
+    });
 
     const result = await leadService.sendCadenceEmail(mockLead.id, mockActiveCampaign.id);
 
@@ -120,7 +119,9 @@ describe('Real Email Delivery Service & Campaign Guard (Unit Tests)', () => {
     // Variable substitution
     expect(sentPayload.subject).toBe('Connecting with TCS / Kali');
     expect(sentPayload.body).toContain('Noticed your work at TCS as HR Director');
-    expect(result.message).toBe('Email submitted successfully.');
+    expect(result.message).toBe('Email sent successfully.');
+    expect(result.previewUrl).toBe('https://ethereal.email/message/preview-789');
+    expect(loggedActivityData.metadata.previewUrl).toBe('https://ethereal.email/message/preview-789');
   });
 
   it('3. should ignore any client-provided recipient email and never send to logged-in user or untrusted email', async () => {
@@ -136,8 +137,9 @@ describe('Real Email Delivery Service & Campaign Guard (Unit Tests)', () => {
       recipientDispatched = payload.to;
       return {
         messageId: 'msg_123',
-        provider: 'resend',
-        status: 'EMAIL_SUBMITTED',
+        previewUrl: 'https://ethereal.email/message/preview-123',
+        provider: 'ethereal',
+        status: 'EMAIL_SENT',
         to: payload.to,
         subject: payload.subject
       };
@@ -223,30 +225,30 @@ describe('Real Email Delivery Service & Campaign Guard (Unit Tests)', () => {
     expect(sendEmailSpy).not.toHaveBeenCalled();
   });
 
-  it('8. should NOT log EMAIL_SENT activity or update status if email provider returns an error', async () => {
+  it('8. should NOT log EMAIL_SENT activity or update status if SMTP provider returns an error', async () => {
     jest.spyOn(leadRepository, 'findById').mockResolvedValue({ ...mockLead });
     jest.spyOn(campaignRepository, 'getEnrollmentsByLeadId').mockResolvedValue([mockEnrollment]);
     jest.spyOn(campaignRepository, 'findById').mockResolvedValue({ ...mockActiveCampaign });
     jest.spyOn(sequenceRepository, 'getStepsByCampaignId').mockResolvedValue([mockCadenceStep]);
     jest.spyOn(activityRepository, 'getByLeadId').mockResolvedValue([]);
 
-    // Provider failure simulation
+    // SMTP failure simulation
     jest.spyOn(emailService, 'sendCadenceEmail').mockRejectedValue(
-      new BadRequestError('Email provider delivery failed: Domain not verified')
+      new BadRequestError('SMTP delivery failed: Connection timeout')
     );
 
     const logActivitySpy = jest.spyOn(activityService, 'logActivity');
     const updateEnrollmentSpy = jest.spyOn(campaignRepository, 'updateEnrollmentStatus');
 
     await expect(leadService.sendCadenceEmail(mockLead.id, mockActiveCampaign.id)).rejects.toThrow(
-      /Domain not verified/i
+      /Connection timeout/i
     );
 
     expect(logActivitySpy).not.toHaveBeenCalled();
     expect(updateEnrollmentSpy).not.toHaveBeenCalled();
   });
 
-  it('9. should log EMAIL_SENT activity with EMAIL_SUBMITTED status and provider messageId upon provider confirmation', async () => {
+  it('9. should log EMAIL_SENT activity with previewUrl upon successful Ethereal SMTP transmission', async () => {
     jest.spyOn(leadRepository, 'findById').mockResolvedValue({ ...mockLead });
     jest.spyOn(campaignRepository, 'getEnrollmentsByLeadId').mockResolvedValue([mockEnrollment]);
     jest.spyOn(campaignRepository, 'findById').mockResolvedValue({ ...mockActiveCampaign });
@@ -255,9 +257,10 @@ describe('Real Email Delivery Service & Campaign Guard (Unit Tests)', () => {
     jest.spyOn(campaignRepository, 'updateEnrollmentStatus').mockResolvedValue(undefined as any);
 
     jest.spyOn(emailService, 'sendCadenceEmail').mockResolvedValue({
-      messageId: 'resend_msg_prod_99999',
-      provider: 'resend',
-      status: 'EMAIL_SUBMITTED',
+      messageId: '<ethereal-live-msg-123@ethereal.email>',
+      previewUrl: 'https://ethereal.email/message/WaQKMgKddxQDoou123',
+      provider: 'ethereal',
+      status: 'EMAIL_SENT',
       to: mockLead.email,
       subject: 'Connecting with TCS / Kali'
     });
@@ -272,10 +275,10 @@ describe('Real Email Delivery Service & Campaign Guard (Unit Tests)', () => {
 
     expect(loggedActivityData).toBeDefined();
     expect(loggedActivityData.type).toBe('EMAIL_SENT');
-    expect(loggedActivityData.metadata.providerMessageId).toBe('resend_msg_prod_99999');
-    expect(loggedActivityData.metadata.deliveryStatus).toBe('EMAIL_SUBMITTED');
+    expect(loggedActivityData.metadata.providerMessageId).toBe('<ethereal-live-msg-123@ethereal.email>');
+    expect(loggedActivityData.metadata.previewUrl).toBe('https://ethereal.email/message/WaQKMgKddxQDoou123');
     expect(loggedActivityData.metadata.recipientEmail).toBe('kali@tcs-enterprise.com');
-    expect(result.emailDetails.providerMessageId).toBe('resend_msg_prod_99999');
-    expect(result.emailDetails.deliveryStatus).toBe('EMAIL_SUBMITTED');
+    expect(result.emailDetails.providerMessageId).toBe('<ethereal-live-msg-123@ethereal.email>');
+    expect(result.previewUrl).toBe('https://ethereal.email/message/WaQKMgKddxQDoou123');
   });
 });

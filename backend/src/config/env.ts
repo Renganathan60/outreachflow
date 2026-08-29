@@ -22,9 +22,13 @@ export const config = {
   },
   corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:5173',
   email: {
-    resendApiKey: process.env.RESEND_API_KEY || '',
-    from: process.env.EMAIL_FROM || 'onboarding@resend.dev',
+    etherealHost: process.env.ETHEREAL_HOST || 'smtp.ethereal.email',
+    etherealPort: parseInt(process.env.ETHEREAL_PORT || '587', 10),
+    etherealUser: process.env.ETHEREAL_USER || '',
+    etherealPass: process.env.ETHEREAL_PASS || '',
+    from: process.env.EMAIL_FROM || 'outreachflow@ethereal.email',
     fromName: process.env.EMAIL_FROM_NAME || 'OutreachFlow',
+    resendApiKey: process.env.RESEND_API_KEY || '',
     webhookSecret: process.env.RESEND_WEBHOOK_SECRET || ''
   }
 };

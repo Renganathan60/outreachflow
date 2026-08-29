@@ -11,6 +11,7 @@ import {
   ShieldBan,
   Send,
   CheckCheck,
+  ExternalLink,
   Activity as ActivityIcon
 } from 'lucide-react';
 import Button from '../common/Button.jsx';
@@ -62,7 +63,7 @@ export default function ActivityTimeline({ lead, activities = [], onActivityLogg
     setIsSendingEmail(true);
     try {
       const res = await leadService.sendCadenceEmail(lead.id, activeCampaign.campaignId);
-      success(res.message || 'Email submitted successfully.');
+      success(res.message || 'Email sent successfully via Ethereal SMTP.');
       if (onActivityLogged) onActivityLogged();
     } catch (err) {
       error(err.message || 'Email could not be sent. Please try again.');
@@ -148,7 +149,7 @@ export default function ActivityTimeline({ lead, activities = [], onActivityLogg
             icon={hasSentEmail ? CheckCheck : Send}
             title={getSendEmailTitle()}
           >
-            {isSendingEmail ? 'Sending email...' : hasSentEmail ? 'Email Sent' : 'Send Email'}
+            {isSendingEmail ? 'Sending...' : hasSentEmail ? 'Email Sent' : 'Send Email'}
           </Button>
 
           {/* Simulate Open */}
@@ -240,7 +241,7 @@ export default function ActivityTimeline({ lead, activities = [], onActivityLogg
 
                   {/* If metadata contains rendered subject/body, display cleanly */}
                   {act.metadata?.subject && (
-                    <div className="mt-2 p-2 rounded-lg bg-white border border-slate-200 text-[11px] text-slate-700">
+                    <div className="mt-2 p-2.5 rounded-lg bg-white border border-slate-200 text-[11px] text-slate-700">
                       <p className="font-semibold text-indigo-700 truncate">
                         Subject: {act.metadata.subject}
                       </p>
@@ -249,6 +250,21 @@ export default function ActivityTimeline({ lead, activities = [], onActivityLogg
                           {act.metadata.body}
                         </p>
                       )}
+                    </div>
+                  )}
+
+                  {/* Ethereal Preview URL Link */}
+                  {act.metadata?.previewUrl && (
+                    <div className="mt-2">
+                      <a
+                        href={act.metadata.previewUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-colors shadow-2xs"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5 text-indigo-600" />
+                        View in Ethereal Email
+                      </a>
                     </div>
                   )}
 
