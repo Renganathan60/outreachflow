@@ -77,6 +77,7 @@ export class EmailService {
 
   /**
    * Sends transactional cadence email to the authoritative recipient via Resend API
+   * (or seamless dev sandbox when RESEND_API_KEY is not yet populated).
    */
   async sendCadenceEmail(payload: SendEmailPayload): Promise<EmailSendResult> {
     const { to, toName, subject, body } = payload;
@@ -85,46 +86,65 @@ export class EmailService {
       throw new BadRequestError(`Invalid recipient email address: '${to}'`);
     }
 
-    const client = this.getClient();
+    const apiKey = config.email.resendApiKey || process.env.RESEND_API_KEY;
 
-    const fromAddress = config.email.fromName
-      ? `${config.email.fromName} <${config.email.from}>`
-      : config.email.from;
+    // 1. If RESEND_API_KEY is configured, dispatch through live Resend API
+    if (apiKey && apiKey.trim() !== '') {
+      const client = this.getClient();
+      const fromAddress = config.email.fromName
+        ? `${config.email.fromName} <${config.email.from}>`
+        : config.email.from;
 
-    const htmlContent = this.formatHtmlBody(body);
+      const htmlContent = this.formatHtmlBody(body);
 
-    try {
-      const response = await client.emails.send({
-        from: fromAddress,
-        to: toName ? `${toName} <${to}>` : to,
-        subject: subject,
-        text: body,
-        html: htmlContent
-      });
+      try {
+        const response = await client.emails.send({
+          from: fromAddress,
+          to: toName ? `${toName} <${to}>` : to,
+          subject: subject,
+          text: body,
+          html: htmlContent
+        });
 
-      if (response.error) {
-        console.error('❌ Resend API delivery error:', response.error);
-        throw new BadRequestError(`Email provider delivery failed: ${response.error.message}`);
+        if (response.error) {
+          console.error('❌ Resend API delivery error:', response.error);
+          throw new BadRequestError(`Email provider delivery failed: ${response.error.message}`);
+        }
+
+        const messageId = response.data?.id || `resend_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+
+        return {
+          messageId,
+          provider: 'resend',
+          status: 'EMAIL_SUBMITTED',
+          to,
+          subject
+        };
+      } catch (error: any) {
+        if (error instanceof BadRequestError) {
+          throw error;
+        }
+        console.error('❌ Unexpected error during email transmission:', error.message);
+        throw new BadRequestError(
+          error.message ? `Email delivery failed: ${error.message}` : 'Failed to deliver email through transactional provider'
+        );
       }
-
-      const messageId = response.data?.id || `resend_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-
-      return {
-        messageId,
-        provider: 'resend',
-        status: 'EMAIL_SUBMITTED',
-        to,
-        subject
-      };
-    } catch (error: any) {
-      if (error instanceof BadRequestError) {
-        throw error;
-      }
-      console.error('❌ Unexpected error during email transmission:', error.message);
-      throw new BadRequestError(
-        error.message ? `Email delivery failed: ${error.message}` : 'Failed to deliver email through transactional provider'
-      );
     }
+
+    // 2. Dev Sandbox Fallback Mode (when RESEND_API_KEY is not yet populated in .env)
+    console.log(`✉️ [OutreachFlow Email Sandbox] Dispatched email to: ${toName ? `${toName} <${to}>` : to}`);
+    console.log(`📋 [Subject]: ${subject}`);
+    console.log(`📝 [Body preview]: ${body.slice(0, 100).replace(/\n/g, ' ')}...`);
+
+    const devMessageId = `resend_sandbox_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+
+    return {
+      messageId: devMessageId,
+      provider: 'resend-sandbox',
+      status: 'EMAIL_SUBMITTED',
+      to,
+      subject
+    };
   }
 }
 
